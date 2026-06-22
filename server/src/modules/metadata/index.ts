@@ -2,7 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { ensureDir, formatDate, getDirSize } from '../../utils';
 import { config } from '../../config';
-import type { PackageInfo, PackageVersion, CacheStats, StorageTrend, CachePolicy, RegistryType, PackageSource } from '../../types';
+import type { PackageInfo, PackageVersion, CacheStats, StorageTrend, CachePolicy, RegistryType, PackageSource, SearchMeta, MatchInfo } from '../../types';
+import { matchPackageName, findBestSuggestion } from './search';
 
 interface DBPackage {
   id: number;
@@ -249,29 +250,98 @@ export class MetadataIndex {
     offset?: number;
     sortBy?: 'name' | 'updatedAt' | 'size' | 'downloads';
     sortOrder?: 'asc' | 'desc';
-  } = {}): { packages: PackageInfo[]; total: number } {
+  } = {}): { packages: PackageInfo[]; total: number; searchMeta?: SearchMeta } {
     let list = [...this.db.packages];
 
     if (options.registry) list = list.filter((p) => p.registry === options.registry);
     if (options.source) list = list.filter((p) => p.source === options.source);
+
+    const matchMap = new Map<number, MatchInfo>();
+    let searchMeta: SearchMeta | undefined;
+
     if (options.search) {
-      const s = options.search.toLowerCase();
-      list = list.filter((p) => p.name.toLowerCase().includes(s));
+      const q = options.search.trim();
+      const matched: Array<{ pkg: DBPackage; match: MatchInfo }> = [];
+
+      for (const pkg of list) {
+        const result = matchPackageName(q, pkg.name, pkg.description);
+        if (result) {
+          matched.push({ pkg, match: result });
+          matchMap.set(pkg.id, result);
+        }
+      }
+
+      let correctedQuery: string | undefined;
+      let suggestions: string[] = [];
+
+      if (matched.length === 0) {
+        const suggestion = findBestSuggestion(q, this.db.packages.map((p) => p.name));
+        if (suggestion) {
+          correctedQuery = suggestion;
+          suggestions.push(suggestion);
+
+          const s = suggestion.toLowerCase();
+          for (const pkg of list) {
+            if (pkg.name.toLowerCase() === s) {
+              const forcedMatch: MatchInfo = {
+                score: 70,
+                matchedBy: 'suggestion',
+                matchedField: 'name',
+                suggestion,
+              };
+              matched.push({ pkg, match: forcedMatch });
+              matchMap.set(pkg.id, forcedMatch);
+            }
+          }
+        }
+      } else {
+        const allNames = this.db.packages.map((p) => p.name);
+        const suggestion = findBestSuggestion(q, allNames.filter((n) => {
+          const existingResults = matched.filter((m) => m.pkg.name === n);
+          return existingResults.length === 0 || (existingResults[0]?.match.score ?? 0) < 60;
+        }));
+        if (suggestion && suggestion.toLowerCase() !== q.toLowerCase()) {
+          suggestions.push(suggestion);
+        }
+      }
+
+      list = matched.map((m) => m.pkg);
+
+      searchMeta = {
+        originalQuery: q,
+        correctedQuery,
+        suggestions: suggestions.length > 0 ? suggestions : undefined,
+        hasFuzzyMatches: matched.some((m) => m.match.matchedBy === 'fuzzy' || m.match.matchedBy === 'suggestion'),
+        hasSuggestions: suggestions.length > 0,
+      };
     }
 
     const total = list.length;
 
-    const sortField = options.sortBy === 'size' ? 'totalSize' :
-      options.sortBy === 'downloads' ? 'downloadCount' :
-      options.sortBy === 'updatedAt' ? 'updatedAt' : 'name';
-    const order = options.sortOrder?.toUpperCase() === 'ASC' ? 1 : -1;
+    const hasSearch = !!options.search && matchMap.size > 0;
 
-    list.sort((a: any, b: any) => {
-      const va = a[sortField];
-      const vb = b[sortField];
-      if (typeof va === 'string') return va.localeCompare(vb) * order;
-      return (va - vb) * order;
-    });
+    if (hasSearch) {
+      list.sort((a, b) => {
+        const ma = matchMap.get(a.id);
+        const mb = matchMap.get(b.id);
+        const sa = ma?.score ?? 0;
+        const sb = mb?.score ?? 0;
+        if (sb !== sa) return sb - sa;
+        return a.name.localeCompare(b.name);
+      });
+    } else {
+      const sortField = options.sortBy === 'size' ? 'totalSize' :
+        options.sortBy === 'downloads' ? 'downloadCount' :
+        options.sortBy === 'updatedAt' ? 'updatedAt' : 'name';
+      const order = options.sortOrder?.toUpperCase() === 'ASC' ? 1 : -1;
+
+      list.sort((a: any, b: any) => {
+        const va = a[sortField];
+        const vb = b[sortField];
+        if (typeof va === 'string') return va.localeCompare(vb) * order;
+        return (va - vb) * order;
+      });
+    }
 
     const limit = options.limit || 50;
     const offset = options.offset || 0;
@@ -302,6 +372,7 @@ export class MetadataIndex {
       updatedAt: pkg.updatedAt,
       totalSize: pkg.totalSize,
       downloadCount: pkg.downloadCount,
+      matchInfo: matchMap.get(pkg.id),
       versions: (versionsByPkg[pkg.id] || []).map<PackageVersion>((v) => ({
         version: v.version,
         size: v.size,
@@ -312,6 +383,9 @@ export class MetadataIndex {
       })),
     }));
 
+    if (searchMeta) {
+      return { packages, total, searchMeta };
+    }
     return { packages, total };
   }
 

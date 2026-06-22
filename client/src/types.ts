@@ -1,6 +1,25 @@
 export type RegistryType = 'npm' | 'pypi';
 export type PackageSource = 'cache' | 'private' | 'upstream';
 
+export type MatchType = 'exact' | 'prefix' | 'substring' | 'fuzzy' | 'alias' | 'suggestion';
+
+export type MatchField = 'name' | 'alias' | 'description';
+
+export interface MatchInfo {
+  score: number;
+  matchedBy: MatchType;
+  matchedField?: MatchField;
+  suggestion?: string;
+}
+
+export interface SearchMeta {
+  originalQuery: string;
+  correctedQuery?: string;
+  suggestions?: string[];
+  hasFuzzyMatches: boolean;
+  hasSuggestions: boolean;
+}
+
 export interface PackageVersion {
   version: string;
   size: number;
@@ -24,11 +43,13 @@ export interface PackageInfo {
   updatedAt: number;
   totalSize: number;
   downloadCount: number;
+  matchInfo?: MatchInfo;
 }
 
 export interface PackageListResponse {
   packages: PackageInfo[];
   total: number;
+  searchMeta?: SearchMeta;
 }
 
 export interface CacheStats {

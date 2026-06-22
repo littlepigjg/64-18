@@ -2,6 +2,25 @@ export type RegistryType = 'npm' | 'pypi';
 
 export type PackageSource = 'cache' | 'private' | 'upstream';
 
+export type MatchType = 'exact' | 'prefix' | 'substring' | 'fuzzy' | 'alias' | 'suggestion';
+
+export type MatchField = 'name' | 'alias' | 'description';
+
+export interface MatchInfo {
+  score: number;
+  matchedBy: MatchType;
+  matchedField?: MatchField;
+  suggestion?: string;
+}
+
+export interface SearchMeta {
+  originalQuery: string;
+  correctedQuery?: string;
+  suggestions?: string[];
+  hasFuzzyMatches: boolean;
+  hasSuggestions: boolean;
+}
+
 export interface PackageInfo {
   name: string;
   registry: RegistryType;
@@ -16,6 +35,7 @@ export interface PackageInfo {
   updatedAt: number;
   totalSize: number;
   downloadCount: number;
+  matchInfo?: MatchInfo;
 }
 
 export interface PackageVersion {

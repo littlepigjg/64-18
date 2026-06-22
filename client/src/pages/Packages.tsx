@@ -14,18 +14,33 @@ import {
   Loader2,
   ArrowUpDown,
   TrendingUp,
+  Sparkles,
+  Lightbulb,
+  X,
+  Wand2,
+  Tag,
 } from 'lucide-react';
 import { api } from '../api';
-import type { PackageInfo, RegistryType, PackageSource } from '../types';
+import type { PackageInfo, RegistryType, PackageSource, MatchType, SearchMeta } from '../types';
 import { formatSize, formatRelativeTime } from '../utils';
 
 type SortBy = 'name' | 'updatedAt' | 'size' | 'downloads';
+
+const MATCH_LABELS: Record<MatchType, { text: string; className: string; icon?: string }> = {
+  exact: { text: '精确匹配', className: 'bg-emerald-100 text-emerald-700' },
+  prefix: { text: '前缀匹配', className: 'bg-sky-100 text-sky-700' },
+  substring: { text: '子串匹配', className: 'bg-blue-100 text-blue-700' },
+  fuzzy: { text: '模糊匹配', className: 'bg-amber-100 text-amber-700', icon: '✨' },
+  alias: { text: '别名匹配', className: 'bg-violet-100 text-violet-700', icon: '🏷️' },
+  suggestion: { text: '纠错推荐', className: 'bg-rose-100 text-rose-700', icon: '💡' },
+};
 
 export default function Packages() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [packages, setPackages] = useState<PackageInfo[]>([]);
   const [total, setTotal] = useState(0);
+  const [searchMeta, setSearchMeta] = useState<SearchMeta | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [search, setSearch] = useState(searchParams.get('search') || '');
@@ -58,6 +73,7 @@ export default function Packages() {
       });
       setPackages(result.packages);
       setTotal(result.total);
+      setSearchMeta(result.searchMeta || null);
     } finally {
       setLoading(false);
     }
@@ -88,6 +104,16 @@ export default function Packages() {
     }
   };
 
+  const applySuggestion = (suggestion: string) => {
+    setSearch(suggestion);
+    setPage(1);
+  };
+
+  const clearSearch = () => {
+    setSearch('');
+    setPage(1);
+  };
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
@@ -106,14 +132,23 @@ export default function Packages() {
           <div className="relative flex-1 min-w-[240px]">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
-              className="input pl-9"
-              placeholder="搜索包名..."
+              className="input pl-9 pr-9"
+              placeholder="搜索包名...（支持模糊匹配、拼写纠错）"
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
                 setPage(1);
               }}
             />
+            {search && (
+              <button
+                onClick={clearSearch}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-slate-600"
+                title="清除搜索"
+              >
+                <X size={14} />
+              </button>
+            )}
           </div>
 
           <select
@@ -147,6 +182,48 @@ export default function Packages() {
             已筛选
           </div>
         </div>
+
+        {searchMeta && (
+          <div className="space-y-2">
+            {searchMeta.correctedQuery && (
+              <div className="flex items-center gap-2 text-sm bg-amber-50 border border-amber-200 text-amber-800 px-3 py-2 rounded-lg">
+                <Wand2 size={14} className="shrink-0" />
+                <span>
+                  未找到 &quot;<span className="font-medium">{searchMeta.originalQuery}</span>&quot; 的结果，已为您推荐：
+                </span>
+                <button
+                  onClick={() => applySuggestion(searchMeta.correctedQuery!)}
+                  className="ml-1 px-2 py-0.5 bg-amber-100 hover:bg-amber-200 rounded font-medium transition-colors"
+                >
+                  {searchMeta.correctedQuery}
+                </button>
+              </div>
+            )}
+
+            {!searchMeta.correctedQuery && searchMeta.suggestions && searchMeta.suggestions.length > 0 && searchMeta.suggestions[0] !== search && (
+              <div className="flex items-center gap-2 text-sm bg-sky-50 border border-sky-200 text-sky-800 px-3 py-2 rounded-lg">
+                <Lightbulb size={14} className="shrink-0" />
+                <span>您是不是要找：</span>
+                {searchMeta.suggestions.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => applySuggestion(s)}
+                    className="px-2 py-0.5 bg-sky-100 hover:bg-sky-200 rounded font-medium transition-colors"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {searchMeta.hasFuzzyMatches && !searchMeta.correctedQuery && (
+              <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg">
+                <Sparkles size={12} />
+                已启用模糊匹配，部分结果可能基于拼写相似性
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="card overflow-hidden">
@@ -219,7 +296,25 @@ export default function Packages() {
                       </div>
                     </td>
                     <td>
-                      <div className="font-medium text-slate-800">{pkg.name}</div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="font-medium text-slate-800">{pkg.name}</div>
+                        {pkg.matchInfo && pkg.matchInfo.matchedBy !== 'exact' && (() => {
+                          const label = MATCH_LABELS[pkg.matchInfo.matchedBy];
+                          const displayName = pkg.matchInfo.suggestion && pkg.matchInfo.suggestion !== pkg.name
+                            ? pkg.matchInfo.suggestion
+                            : undefined;
+                          return (
+                            <span className={`badge text-[10px] px-1.5 py-0.5 ${label.className}`}>
+                              {label.icon} {label.text}
+                              {displayName && (
+                                <span className="ml-1 opacity-75">
+                                  ({displayName})
+                                </span>
+                              )}
+                            </span>
+                          );
+                        })()}
+                      </div>
                       {pkg.description && (
                         <div className="text-xs text-slate-400 mt-0.5 truncate max-w-md">
                           {pkg.description}
